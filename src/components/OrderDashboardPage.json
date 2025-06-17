@@ -1,0 +1,810 @@
+<script setup>
+import { ref, onMounted } from 'vue';
+// Importamos nuestro store de autenticación para obtener el token
+import { useAuthStore } from '@/stores/authStore';
+// Importamos el router si necesitamos navegar (ej: si no estamos autenticados)
+import { useRouter } from 'vue-router';
+
+// Obtenemos la instancia del store de autenticación
+const authStore = useAuthStore();
+// Obtenemos la instancia del router
+const router = useRouter();
+
+// --- Estado para la lista de Pedidos ---
+const pedidos = ref([]); // Lista de pedidos obtenida de la API
+const loading = ref(true); // Indica si se están cargando los pedidos
+const error = ref(null);   // Para errores al cargar pedidos
+
+// Estado para manejar mensajes de estado del dashboard (ej: éxito/error al cambiar estado)
+const dashboardMessage = ref(null);
+const dashboardMessageType = ref(null); // 'success' or 'error'
+
+// --- Estado y Lógica para la Comanda ---
+const showComanda = ref(false); // Controla la visibilidad del modal de comanda
+const comandaPedido = ref(null); // Almacena los detalles del pedido para la comanda
+const loadingComanda = ref(false); // Indica si se está cargando la comanda
+const errorComanda = ref(null);   // Para errores al cargar la comanda
+
+// --- Estado y Lógica para el Filtro ---
+const filtroEstado = ref(''); // Variable para almacenar el estado de filtro seleccionado ('', 'Pendiente', etc.)
+
+// Opciones para el selector de filtro (deben coincidir con las claves del backend + 'Todos')
+const opcionesFiltroEstado = [
+    { value: '', text: 'Todos los Estados' }, // Opción para no filtrar
+    { value: 'Pendiente', text: 'Pendiente' },
+    { value: 'En Preparacion', text: 'En Preparación' }, // Coincide con la clave del backend
+    { value: 'En Camino', text: 'En Camino' },         // Coincide con la clave del backend
+    { value: 'Entregado', text: 'Entregado' },
+    { value: 'Cancelado', text: 'Cancelado' },
+];
+
+
+// Función para mostrar mensajes temporales en el dashboard
+const showDashboardMessage = (message, type = 'info') => {
+    dashboardMessage.value = message;
+    dashboardMessageType.value = type;
+    // Opcional: Ocultar el mensaje después de unos segundos
+    // setTimeout(() => {
+    //     dashboardMessage.value = null;
+    //     dashboardMessageType.value = null;
+    // }, 5000); // Ocultar después de 5 segundos
+};
+
+
+// Función asíncrona para obtener la lista de pedidos desde la API
+// Ahora acepta un parámetro opcional para el estado de filtro
+const fetchPedidos = async (estadoFiltro = filtroEstado.value) => {
+  loading.value = true;
+  error.value = null;
+  dashboardMessage.value = null; // Limpiar mensajes al recargar
+
+  const token = authStore.authToken;
+
+  if (!token) {
+    error.value = 'No autenticado. Por favor, inicie sesión.';
+    console.error('Error: No hay token de autenticación en el store.');
+    loading.value = false;
+    router.push('/login'); // Redirigir al login
+    return;
+  }
+
+  try {
+    let apiUrl = 'http://127.0.0.1:8000/pedidos/api/list/';
+
+    // --- Añadir parámetro de filtro si hay un estado seleccionado (y no es 'Todos') ---
+    if (estadoFiltro && estadoFiltro !== '') {
+        // Usamos URLSearchParams para construir la query string
+        const params = new URLSearchParams({ estado: estadoFiltro });
+        apiUrl = `${apiUrl}?${params.toString()}`;
+        console.log('Fetching pedidos con filtro:', apiUrl);
+    } else {
+        console.log('Fetching todos los pedidos:', apiUrl);
+    }
+    // --- Fin de añadir parámetro de filtro ---
+
+
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Token ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+       let errorData = {};
+       try {
+          errorData = await response.json();
+       } catch (e) {
+          errorData = { detail: `Error HTTP: ${response.status}` };
+       }
+
+       console.error('Error al obtener pedidos (respuesta no OK):', response.status, errorData);
+
+       if (response.status === 401 || response.status === 403) {
+            console.warn('Token inválido o sin permisos staff. Deslogueando y redirigiendo al login.');
+            authStore.logout(); // Desloguea localmente
+            router.push('/login');
+            return; // Salimos de la función
+       }
+
+       error.value = `Error al obtener pedidos: ${errorData.detail || `HTTP Status ${response.status}`}`;
+       return;
+    }
+
+    const data = await response.json();
+
+    if (Array.isArray(data)) {
+        pedidos.value = data;
+        console.log('Pedidos obtenidos y mostrados:', pedidos.value);
+    } else {
+        error.value = 'Respuesta inesperada del servidor al obtener pedidos.';
+        console.error('Error: Respuesta 200 OK no es un array:', data);
+    }
+
+  } catch (err) {
+    error.value = `Error de conexión o procesamiento: ${err.message}`;
+    console.error('Error general en fetchPedidos:', err);
+  } finally {
+    loading.value = false;
+  }
+};
+
+// Usamos el hook onMounted para llamar a fetchPedidos cuando el componente se monte
+onMounted(() => {
+  if (authStore.isAuthenticated) {
+      // Llamamos a fetchPedidos sin filtro inicial (mostrará todos por defecto si filtroEstado es '')
+      fetchPedidos();
+  } else {
+      console.warn('OrderDashboardPage montada sin token en store. Redirigiendo al login.');
+      router.push('/login');
+  }
+});
+
+// Función para formatear la fecha/hora
+const formatDateTime = (dateTimeString) => {
+    if (!dateTimeString) return 'N/A';
+    const options = { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+    try {
+        return new Date(dateTimeString).toLocaleString(undefined, options);
+    } catch (e) {
+        console.error('Error formateando fecha:', dateTimeString, e);
+        return 'Fecha inválida';
+    }
+};
+
+// Función para navegar a la página de toma de pedidos
+const goToOrderPage = () => {
+    router.push('/order');
+};
+
+// Función para generar Comanda (ahora abre un modal)
+const generarComanda = async (pedidoId) => {
+    console.log(`Intentando generar comanda para pedido ID: ${pedidoId}`);
+
+    // Resetear estado del modal antes de abrir
+    loadingComanda.value = true;
+    errorComanda.value = null;
+    comandaPedido.value = null;
+    showComanda.value = true; // Mostrar el modal (inicialmente en estado de carga)
+
+
+    const token = authStore.authToken;
+
+    if (!token) {
+        errorComanda.value = 'No autenticado. No se puede generar la comanda.';
+        console.error('Error: No hay token en el store al intentar generar comanda.');
+        loadingComanda.value = false;
+        authStore.logout();
+        router.push('/login');
+        return;
+    }
+
+    try {
+        const apiUrl = `http://127.0.0.1:8000/pedidos/api/${pedidoId}/detail/`;
+
+        const response = await fetch(apiUrl, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Token ${token}`,
+            },
+        });
+
+        if (!response.ok) {
+            let errorData = {};
+            try { errorData = await response.json(); } catch (e) { errorData = { detail: `Error HTTP: ${response.status}` }; }
+
+            console.error('Error al obtener detalles de comanda (respuesta no OK):', response.status, errorData);
+
+             if (response.status === 401 || response.status === 403) {
+                  console.warn('Token inválido o sin permisos staff al obtener comanda. Deslogueando.');
+                  authStore.logout();
+                  router.push('/login');
+                  errorComanda.value = 'Su sesión expiró o no tiene permisos. Inicie sesión nuevamente.';
+                  showComanda.value = false; // Cerrar modal si hay error de auth
+                  return;
+             }
+             if (response.status === 404) {
+                 errorComanda.value = `Pedido con ID ${pedidoId} no encontrado.`;
+             } else {
+                 errorComanda.value = `Error al obtener detalles de comanda: ${errorData.detail || `HTTP Status ${response.status}`}`;
+             }
+            return;
+        }
+
+        const pedidoDetalles = await response.json();
+
+        console.log('Detalles de comanda obtenidos:', pedidoDetalles);
+
+        comandaPedido.value = pedidoDetalles;
+        errorComanda.value = null;
+
+    } catch (err) {
+        // Capturamos errores de red u otros errores
+        errorComanda.value = `Error de conexión o procesamiento al obtener comanda: ${err.message}`;
+        console.error('Error general en generarComanda:', err);
+    } finally {
+        loadingComanda.value = false;
+    }
+};
+
+// Función para cerrar la vista del modal de comanda
+const closeComanda = () => {
+    showComanda.value = false;
+    comandaPedido.value = null;
+    errorComanda.value = null;
+};
+
+// --- Nueva función para imprimir la comanda ---
+const printComanda = () => {
+    // Esta función simplemente activa el diálogo de impresión del navegador.
+    // Los estilos CSS con @media print se encargarán de dar formato al contenido.
+    window.print();
+};
+
+
+// Función para cambiar el estado del pedido
+const cambiarEstado = async (pedidoId, nuevoEstado) => {
+     console.log(`Intentando cambiar estado de pedido ID: ${pedidoId} a ${nuevoEstado}`);
+
+     if (!nuevoEstado) {
+         showDashboardMessage('Seleccione un estado válido.', 'error');
+         return;
+     }
+
+     const token = authStore.authToken;
+
+     if (!token) {
+         showDashboardMessage('No autenticado. No se puede cambiar el estado.', 'error');
+         console.error('Error: No hay token en el store al intentar cambiar estado.');
+         authStore.logout();
+         router.push('/login');
+         return;
+     }
+
+     try {
+         const apiUrl = `http://127.0.0.1:8000/pedidos/api/${pedidoId}/update_status/`;
+
+         const response = await fetch(apiUrl, {
+             method: 'PATCH',
+             headers: {
+                 'Content-Type': 'application/json',
+                 'Authorization': `Token ${token}`,
+             },
+             body: JSON.stringify({ estado: nuevoEstado }),
+         });
+
+         if (!response.ok) {
+             let errorData = {};
+             try { errorData = await response.json(); } catch (e) { errorData = { detail: `Error HTTP: ${response.status}` }; }
+
+             console.error('Error al cambiar estado (respuesta no OK):', response.status, errorData);
+
+             if (response.status === 401 || response.status === 403) {
+                  console.warn('Token inválido o sin permisos staff al cambiar estado. Deslogueando.');
+                  authStore.logout();
+                  router.push('/login');
+                  showDashboardMessage('Su sesión expiró o no tiene permisos. Inicie sesión nuevamente.', 'error');
+                  return;
+             }
+
+             if (response.status === 400) {
+                  let formattedErrors = '';
+                  if (errorData) {
+                      for (const field in errorData) {
+                          const messages = Array.isArray(errorData[field]) ? errorData[field].join(', ') : errorData[field];
+                          formattedErrors += `${field}: ${messages}\n`;
+                      }
+                  }
+                  showDashboardMessage(`Error de validación al cambiar estado:\n${formattedErrors || JSON.stringify(errorData)}`, 'error');
+
+             } else {
+                  showDashboardMessage(`Error al cambiar estado: ${errorData.detail || `HTTP Status ${response.status}`}`, 'error');
+             }
+             fetchPedidos(); // Refrescar la lista para mostrar el estado real desde el backend
+             return;
+         }
+
+         const successData = await response.json();
+
+         console.log('Estado de pedido actualizado con éxito:', successData);
+
+         const index = pedidos.value.findIndex(p => p.id === pedidoId);
+         if (index !== -1) {
+             pedidos.value[index].estado = nuevoEstado;
+         }
+
+         showDashboardMessage(`Estado del Pedido #${pedidoId} actualizado a "${nuevoEstado}".`, 'success');
+
+     } catch (err) {
+         showDashboardMessage(`Error de conexión o procesamiento al cambiar estado: ${err.message}`, 'error');
+         console.error('Error general en cambiarEstado:', err);
+         fetchPedidos();
+     }
+};
+
+
+// Opcional: Getter computado para calcular el total provisional del pedido en la UI
+// (No necesario en el dashboard, pero lo mantenemos si lo copiaste de OrderPage)
+/*
+import { computed } from 'vue';
+const totalPedidoProvisional = computed(() => {
+    return pedidoProvisionalItems.value.reduce((sum, item) => {
+        const precio = parseFloat(item.precio_unitario);
+        const cantidad = parseInt(item.cantidad);
+        if (!isNaN(precio) && !isNaN(cantidad)) {
+             return sum + (precio * cantidad);
+        }
+        return sum;
+    }, 0);
+});
+*/
+
+
+</script>
+
+<template>
+  <div class="order-dashboard-container">
+    <h1>Dashboard de Pedidos Activos</h1>
+
+     <button @click="goToOrderPage" class="go-to-order-button">
+        + Nuevo Pedido
+    </button>
+
+    <div v-if="dashboardMessage" :class="['dashboard-message', dashboardMessageType]">
+        {{ dashboardMessage }}
+    </div>
+
+    <div class="filter-section">
+        <label for="estadoFilter">Filtrar por Estado:</label>
+        <select id="estadoFilter" v-model="filtroEstado" @change="fetchPedidos(filtroEstado)">
+            <option v-for="option in opcionesFiltroEstado" :key="option.value" :value="option.value">
+                {{ option.text }}
+            </option>
+        </select>
+    </div>
+    <div v-if="loading">Cargando pedidos...</div>
+    <div v-if="error" class="error-message">Error al cargar pedidos: {{ error }}</div>
+
+    <div v-if="!loading && !error && pedidos.length > 0" class="order-list">
+      <table>
+        <thead>
+          <tr>
+            <th># Pedido</th>
+            <th>Fecha/Hora</th>
+            <th>Tipo Venta</th>
+            <th>Cliente</th>
+            <th>Total</th>
+            <th>Estado</th>
+            <th>Ítems</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="pedido in pedidos" :key="pedido.id">
+            <td>{{ pedido.id }}</td>
+            <td>{{ formatDateTime(pedido.fecha_hora) }}</td>
+            <td>{{ pedido.tipo_venta }}</td>
+            <td>
+                <div v-if="pedido.cliente">
+                    <strong>{{ pedido.cliente.nombre }}</strong><br>
+                    <small>{{ pedido.cliente.telefono }}</small><br>
+                    <small>{{ pedido.cliente.direccion }}</small>
+                </div>
+                <div v-else>
+                    Mostrador
+                    </div>
+            </td>
+            <td>${{ parseFloat(pedido.total).toFixed(2) }}</td>
+            <td>
+                <select
+                     :value="pedido.estado"  @change="cambiarEstado(pedido.id, $event.target.value)" class="status-select"
+                 >
+                     <option value="Pendiente">Pendiente</option>
+                     <option value="En Preparacion">En Preparación</option>
+                     <option value="En Camino">En Camino</option>
+                     <option value="Entregado">Entregado</option>
+                     <option value="Cancelado">Cancelado</option>
+                 </select>
+            </td>
+            <td>
+                <ul>
+                    <li v-for="item in pedido.detalles" :key="item.id">
+                        <strong>{{ item.cantidad }} x {{ item.producto.nombre }}</strong>
+                        {{ item.tamaño ? `(${item.tamaño})` : '' }}
+                        ({{ item.tipo_unidad }})
+                        - ${{ parseFloat(item.subtotal).toFixed(2) }}
+                    </li>
+                </ul>
+            </td>
+            <td class="actions-cell">
+                 <button @click="generarComanda(pedido.id)" class="action-button comanda-button">Comanda</button>
+                 </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div v-if="!loading && !error && pedidos.length === 0">
+        No hay pedidos activos en este momento.
+    </div>
+
+    <div v-if="showComanda" class="modal-overlay" @click.self="closeComanda">
+        <div class="modal-content" id="comandaToPrint">
+             <div class="comanda-header">
+                <h3>Comanda del Pedido #{{ comandaPedido ? comandaPedido.id : '...' }}</h3>
+                <button @click="closeComanda" class="close-comanda-button print-hidden">X</button>
+            </div>
+
+            <div v-if="loadingComanda">Cargando comanda...</div>
+            <div v-if="errorComanda" class="error-message">{{ errorComanda }}</div>
+
+            <div v-if="comandaPedido && !loadingComanda && !errorComanda" class="comanda-details">
+                <p><strong>Fecha/Hora:</strong> {{ formatDateTime(comandaPedido.fecha_hora) }}</p>
+                <p><strong>Tipo de Venta:</strong> {{ comandaPedido.tipo_venta }}</p>
+                <div v-if="comandaPedido.cliente">
+                    <p><strong>Cliente:</strong> {{ comandaPedido.cliente.nombre }}</p>
+                    <p><strong>Teléfono:</strong> {{ comandaPedido.cliente.telefono }}</p>
+                    <p><strong>Dirección:</strong> {{ comandaPedido.cliente.direccion }}</p>
+                </div>
+                <div v-else>
+                     <p><strong>Cliente:</strong> Mostrador</p>
+                </div>
+
+
+                <h4>Ítems:</h4>
+                <ul>
+                    <li v-for="item in comandaPedido.detalles" :key="item.id">
+                        <strong>{{ item.cantidad }} x {{ item.producto.nombre }}</strong>
+                        {{ item.tamaño ? `(${item.tamaño})` : '' }}
+                        ({{ item.tipo_unidad }})
+                        </li>
+                </ul>
+
+                <p><strong>Total:</strong> ${{ parseFloat(comandaPedido.total).toFixed(2) }}</p>
+                <p v-if="comandaPedido.tipo_venta === 'Delivery' && parseFloat(comandaPedido.costo_delivery) > 0">
+                    (Costo Delivery: ${{ parseFloat(comandaPedido.costo_delivery).toFixed(2) }})
+                </p>
+
+                 <button @click="printComanda" class="action-button print-button print-hidden">Imprimir Comanda</button>
+
+            </div>
+        </div>
+    </div>
+
+
+  </div>
+</template>
+
+<style scoped>
+/* Estilos básicos para la página del dashboard de pedidos */
+.order-dashboard-container {
+  font-family: sans-serif;
+  padding: 20px;
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  max-width: 1200px; /* Aumentamos el ancho para la tabla */
+  margin: 20px auto;
+}
+
+h1 {
+    color: #333;
+    border-bottom: 2px solid #ccc;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+    display: inline-block;
+    margin-right: 20px;
+}
+
+.logout-button {
+    float: right;
+    margin-top: -40px;
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+.logout-button:hover { background-color: #c82333; }
+
+.go-to-order-button { /* Estilo para el nuevo botón de ir a tomar pedido */
+    float: right;
+    margin-top: -40px;
+    margin-right: 10px; /* Espacio entre botones */
+    background-color: #007bff;
+    color: white;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+.go-to-order-button:hover { background-color: #0056b3; }
+
+/* Estilos para los mensajes de estado del dashboard */
+.dashboard-message {
+    padding: 10px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    text-align: center;
+    font-weight: bold;
+}
+.dashboard-message.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+.dashboard-message.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+
+.error-message { /* Mantenemos este para errores de carga inicial */
+  color: red;
+  margin-bottom: 20px;
+  text-align: center;
+  font-weight: bold;
+}
+
+/* Estilos de la sección de filtro */
+.filter-section {
+    margin-bottom: 20px;
+    padding: 10px;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    background-color: #f9f9f9;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.filter-section label {
+    font-weight: bold;
+    color: #555;
+}
+
+.filter-section select {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+
+.order-list table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    font-size: 0.9em; /* Reducimos un poco el tamaño de fuente de la tabla */
+}
+
+.order-list th,
+.order-list td {
+    border: 1px solid #ddd;
+    padding: 8px; /* Reducimos el padding */
+    text-align: left;
+    vertical-align: top;
+}
+
+.order-list th {
+    background-color: #f2f2f2;
+    font-weight: bold;
+}
+
+ .order-list tbody tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+.order-list td ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.order-list td li {
+    margin-bottom: 5px;
+    padding-bottom: 5px;
+    border-bottom: 1px dashed #eee;
+}
+
+.order-list td li:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.actions-cell { /* Estilos para la celda de acciones */
+    white-space: nowrap; /* Evita que los botones se envuelvan */
+}
+
+.action-button, .status-select { /* Estilos para botones y selectores de acción */
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-right: 5px; /* Espacio entre elementos de acción */
+    cursor: pointer;
+    font-size: 0.8em;
+}
+
+.action-button:hover {
+    opacity: 0.9;
+}
+
+.comanda-button {
+    background-color: #ffc107; /* Amarillo */
+    color: #333;
+    border-color: #ffc107;
+}
+
+.status-select { /* Estilo específico para el selector de estado */
+    background-color: #fff;
+}
+
+/* Estilos para la estructura del Modal */
+.modal-overlay {
+    position: fixed; /* Fijo en la ventana */
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5); /* Fondo oscuro semi-transparente */
+    display: flex;
+    justify-content: center; /* Centrar horizontalmente */
+    align-items: center; /* Centrar verticalmente */
+    z-index: 1000; /* Asegurarse de que esté por encima de otros elementos */
+}
+
+.modal-content {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    max-width: 600px; /* Ancho máximo del contenido del modal */
+    max-height: 90%; /* Altura máxima para evitar desbordamiento */
+    overflow-y: auto; /* Añadir scroll si el contenido es largo */
+    position: relative; /* Necesario para posicionar el botón de cerrar */
+}
+
+
+/* Estilos de la sección de Comanda dentro del Modal */
+/* Reutilizamos muchos estilos de .comanda-display-area anterior */
+
+.comanda-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #007bff; /* Borde azul para destacar */
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+}
+
+.comanda-header h3 {
+    margin: 0;
+    color: #0056b3;
+    border-bottom: none;
+}
+
+.close-comanda-button {
+    background-color: #ccc;
+    border: none;
+    border-radius: 50%;
+    width: 25px;
+    height: 25px;
+    font-size: 0.9em;
+    cursor: pointer;
+    text-align: center;
+    line-height: 25px;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1001;
+}
+.close-comanda-button:hover {
+    background-color: #bbb;
+}
+
+.comanda-details p {
+    margin-bottom: 8px;
+    font-size: 1em;
+}
+
+.comanda-details h4 {
+    margin-top: 15px;
+    margin-bottom: 10px;
+    color: #333;
+    border-bottom: 1px dashed #a0cfff;
+    padding-bottom: 5px;
+}
+
+.comanda-details ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.comanda-details li {
+    margin-bottom: 5px;
+    font-size: 0.95em;
+    color: #555;
+}
+
+.print-button {
+    background-color: #6c757d;
+    color: white;
+    border-color: #6c757d;
+    margin-top: 20px;
+}
+.print-button:hover {
+    background-color: #5a6268;
+}
+
+
+/* Estilos para los diferentes estados del pedido (opcional) */
+/* Podrías añadir clases dinámicas a la celda o la fila basándote en pedido.estado */
+/* Por ejemplo, usando :class="{ 'status-pending': pedido.estado === 'Pendiente', ... }" */
+/*
+.status-pending { color: orange; font-weight: bold; }
+.status-in-progress { color: blue; font-weight: bold; }
+.status-ready { color: green; font-weight: bold; }
+.status-delivered { color: grey; }
+.status-cancelled { color: red; text-decoration: line-through; }
+*/
+
+/* --- Estilos específicos para Impresión --- */
+@media print {
+    /* Oculta todo el contenido del componente EXCEPTO el modal overlay */
+    /* Esto es más específico para el contenido dentro del componente Vue */
+    .order-dashboard-container > *:not(.modal-overlay) {
+         display: none !important;
+    }
+
+    /* Asegura que el modal overlay y su contenido se muestren y se formateen para impresión */
+    .modal-overlay {
+        position: static !important; /* Elimina el posicionamiento fijo */
+        background-color: transparent !important; /* Elimina el fondo oscuro */
+        display: block !important; /* Asegura que el overlay se muestre */
+        width: auto !important;
+        height: auto !important;
+        overflow: visible !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        /* Eliminar flexbox centering que puede interferir con print layout */
+        justify-content: initial !important;
+        align-items: initial !important;
+    }
+
+    .modal-content {
+        width: auto !important; /* Ancho automático */
+        max-width: 100% !important; /* No restringir ancho */
+        max-height: none !important; /* No restringir altura */
+        box-shadow: none !important; /* Elimina la sombra */
+        border-radius: 0 !important; /* Elimina bordes redondeados */
+        padding: 10mm !important; /* Añade un poco de margen para impresión */
+        overflow: visible !important; /* Permite que el contenido se expanda */
+        margin: 0 auto !important; /* Centra el contenido si es más estrecho que la página */
+        background-color: white !important; /* Asegura fondo blanco */
+    }
+
+    .print-hidden {
+        display: none !important; /* Oculta elementos con esta clase en la impresión (botones, etc.) */
+    }
+
+    /* Opcional: Ajustar fuentes, márgenes, etc. para impresión */
+    body {
+        font-size: 12pt;
+    }
+    .comanda-details h3, .comanda-details h4 {
+        margin-top: 1em;
+        margin-bottom: 0.5em;
+    }
+    .comanda-details p, .comanda-details li {
+        margin-bottom: 0.2em;
+    }
+}
+
+</style>

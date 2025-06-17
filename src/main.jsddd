@@ -1,0 +1,105 @@
+// src/main.js
+
+import { createApp } from 'vue';
+import App from './App.vue';
+import { createRouter, createWebHistory } from 'vue-router';
+import { createPinia } from 'pinia';
+// Importamos el store de autenticación
+import { useAuthStore } from '@/stores/authStore';
+
+
+// Importa los componentes que serán las "páginas" o vistas
+import LoginPage from './components/LoginPage.vue';
+import OrderPage from './components/OrderPage.vue';
+import OrderDashboardPage from './components/OrderDashboardPage.vue';
+import ProductsPage from './components/ProductsPage.vue'; // <-- Importa el componente ProductsPage
+// Ya no necesitamos importar PricesPage si solo usamos el modal
+// import PricesPage from './components/PricesPage.vue';
+import ReportsPage from './components/ReportsPage.vue'; // <-- Necesitaremos este para Reportes
+
+
+// 1. Definir las rutas de la aplicación
+const routes = [
+  {
+    path: '/login',
+    name: 'login',
+    component: LoginPage,
+    // meta: { requiresAuth: false },
+  },
+  {
+    path: '/',
+    redirect: '/login',
+  },
+  {
+    path: '/order',
+    name: 'order',
+    component: OrderPage,
+    // meta: { requiresAuth: true },
+  },
+  {
+    path: '/dashboard',
+    name: 'dashboard',
+    component: OrderDashboardPage,
+    // meta: { requiresAuth: true },
+  },
+  // --- Rutas para la barra de navegación ---
+  {
+    path: '/products', // <-- Ruta para la página de Gestión de Productos
+    name: 'products',
+    component: ProductsPage, // <-- Usa el componente ProductsPage
+    // meta: { requiresAuth: true, requiresStaff: true }, // Puedes añadir meta para guardas de ruta
+  },
+  // Eliminamos la ruta /prices ya que usamos un modal global
+  // {
+  //   path: '/prices', // Ruta para la lista de precios
+  //   name: 'prices',
+  //   component: PricesPage,
+  //   // meta: { requiresAuth: true },
+  // },
+  {
+    path: '/reports', // Ruta para los reportes
+    name: 'reports',
+    component: ReportsPage, // Usaremos este componente (lo crearemos después)
+    // meta: { requiresAuth: true },
+  },
+  // --- Fin Rutas ---
+
+  // Ruta de fallback para manejar URLs no encontradas (404)
+  // {
+  //   path: '/:pathMatch(.*)*',
+  //   name: 'NotFound',
+  //   component: HelloWorld, // Usa un componente 404 real después
+  // }
+];
+
+// 2. Crear la instancia del Router
+const router = createRouter({
+  history: createWebHistory(),
+  routes,
+});
+
+// 3. Crear la instancia de Pinia
+const pinia = createPinia();
+
+
+// 4. Crear la aplicación Vue
+const app = createApp(App);
+
+// 5. Usar el Router y Pinia en la aplicación
+app.use(router);
+app.use(pinia);
+
+// --- NUEVO: Cargar el estado del usuario al iniciar la aplicación ---
+// Obtenemos una instancia del store DESPUÉS de que Pinia ha sido usado por la app
+const authStore = useAuthStore();
+// Llamamos a la acción loadUser para intentar cargar el usuario desde localStorage
+// Usamos .then() para asegurar que el montaje de la app espere a que loadUser termine
+// Esto es útil si las rutas iniciales dependen del estado de autenticación
+authStore.loadUser().then(() => {
+    // 6. Montar la aplicación en el elemento con id="app" en tu index.html
+    app.mount('#app');
+});
+
+// --- FIN NUEVO ---
+
+
